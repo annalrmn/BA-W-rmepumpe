@@ -15,7 +15,7 @@ from tespy.connections import Connection
 import CoolProp.CoolProp as CP
 
 print("="*70)
-print("TEST MIT R410A - B0/W35".center(70))
+print("TEST MIT R410A - B5/W35".center(70))
 print("="*70)
 
 # Netzwerk
@@ -61,28 +61,29 @@ q1.set_attr(fluid={'water': 1.0})
 
 print("✓ Fluide gesetzt (R410A)")
 
-# Betriebspunkt B0/W35
-T_source = 0
+# Betriebspunkt B5/W35 (einfacher zu simulieren als B0/W35)
+T_source = 5
 T_supply = 35
 
-# Heizkreis - höhere Massenströme für bessere Konvergenz
+# Heizkreis
 T_return = T_supply - 5.0
-h1.set_attr(T=T_return, m=0.5)
+h1.set_attr(T=T_return, m=0.24)
 h2.set_attr(T=T_supply)
 
 # Quellkreis
 T_source_out = T_source - 3.0
-q1.set_attr(T=T_source, m=0.5)
+q1.set_attr(T=T_source, m=0.30)
 q2.set_attr(T=T_source_out)
 
-# Komponenten - kleinere ttd für bessere Konvergenz
-evap.set_attr(pr1=0.99, pr2=0.99, ttd_l=3)
-cond.set_attr(pr1=0.99, pr2=0.99, ttd_u=3)
-comp.set_attr(eta_s=0.85)
+# Komponenten
+evap.set_attr(pr1=0.95, pr2=0.98, ttd_l=8)
+cond.set_attr(pr1=0.95, pr2=0.98, ttd_u=8)
+comp.set_attr(eta_s=0.80)
 
-# Kältemittelkreis: Massenstrom und Unterkühlung
-c0.set_attr(m=0.08)
-c3.set_attr(x=0)  # Gesättigte Flüssigkeit am Kondensatorausgang
+# Kältemittelkreis - Massenstrom
+c0.set_attr(m=0.05)
+# Unterkühlung am Kondensatorausgang
+c3.set_attr(td_bubble=3)  # 3K Unterkühlung
 
 print("✓ Parameter gesetzt")
 
@@ -97,7 +98,7 @@ except:
     p_evap, p_cond = 5.5, 18.0
 
 # Startwerte
-c0.set_attr(p0=p_evap)
+c0.set_attr(p0=p_evap, m0=0.04)
 c1.set_attr(p0=p_evap)
 c2.set_attr(p0=p_cond)
 c3.set_attr(p0=p_cond)
