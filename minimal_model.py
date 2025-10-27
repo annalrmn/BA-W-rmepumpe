@@ -1,8 +1,9 @@
 """
-MINIMAL WORKING MODEL - Funktioniert GARANTIERT!
-=================================================
+MINIMAL WORKING MODEL - Basierend auf working_test.py
+=======================================================
 
-Einfachstes Modell ohne hplib - nur mit Standard-Parametern
+Einfachstes Modell mit SimpleHeatExchanger und R134a
+6-Punkt-Validierung für verschiedene Quellentemperaturen
 
 Verwendung:
     python minimal_model.py
@@ -11,136 +12,93 @@ Autor: A. Lohrmann
 """
 
 from tespy.networks import Network
-from tespy.components import (Compressor, Valve, CycleCloser,
-                             Condenser, HeatExchanger, Sink, Source)
+from tespy.components import CycleCloser, Compressor, Valve, SimpleHeatExchanger
 from tespy.connections import Connection
-import CoolProp.CoolProp as CP
 import pandas as pd
 from pathlib import Path
 
 
 def build_heat_pump():
-    """Baut Wärmepumpen-Netzwerk"""
-    nw = Network()
-    nw.set_attr(T_unit='C', p_unit='bar', h_unit='kJ / kg', iterinfo=False)
+    """Baut einfaches Wärmepumpen-Netzwerk mit SimpleHeatExchanger"""
+    hp = Network()
+    hp.set_attr(T_unit="C", p_unit="bar", h_unit="kJ / kg", iterinfo=False)
 
     # Komponenten
-    evap = HeatExchanger('Evaporator')
-    comp = Compressor('Compressor')
-    cond = Condenser('Condenser')
-    valve = Valve('ExpansionValve')
-    cycle = CycleCloser('CycleCloser')
+    cc = CycleCloser("cycle")
+    co = SimpleHeatExchanger("condenser")
+    ev = SimpleHeatExchanger("evaporator")
+    va = Valve("expansion")
+    cp = Compressor("compressor")
 
-    src_heat = Source('HeatingReturn')
-    snk_heat = Sink('HeatingSupply')
-    src_source = Source('SourceInlet')
-    snk_source = Sink('SourceOutlet')
+    # Verbindungen
+    c1 = Connection(cc, "out1", ev, "in1")
+    c2 = Connection(ev, "out1", cp, "in1")
+    c3 = Connection(cp, "out1", co, "in1")
+    c4 = Connection(co, "out1", va, "in1")
+    c0 = Connection(va, "out1", cc, "in1")
+    hp.add_conns(c1, c2, c3, c4, c0)
 
-    # Kältemittelkreis
-    c0 = Connection(cycle, 'out1', evap, 'in1', label='0')
-    c1 = Connection(evap, 'out1', comp, 'in1', label='1')
-    c2 = Connection(comp, 'out1', cond, 'in1', label='2')
-    c3 = Connection(cond, 'out1', valve, 'in1', label='3')
-    c4 = Connection(valve, 'out1', cycle, 'in1', label='4')
-    nw.add_conns(c0, c1, c2, c3, c4)
-
-    # Heizkreis
-    h1 = Connection(src_heat, 'out1', cond, 'in2', label='h_in')
-    h2 = Connection(cond, 'out2', snk_heat, 'in1', label='h_out')
-    nw.add_conns(h1, h2)
-
-    # Quellkreis
-    q1 = Connection(src_source, 'out1', evap, 'in2', label='q_in')
-    q2 = Connection(evap, 'out2', snk_source, 'in1', label='q_out')
-    nw.add_conns(q1, q2)
-
-    return nw, {
-        'evap': evap, 'comp': comp, 'cond': cond,
-        'valve': valve, 'cycle': cycle
+    return hp, {
+        'cc': cc, 'co': co, 'ev': ev, 'va': va, 'cp': cp
     }, {
-        'c0': c0, 'c1': c1, 'c2': c2, 'c3': c3, 'c4': c4,
-        'h1': h1, 'h2': h2, 'q1': q1, 'q2': q2
+        'c0': c0, 'c1': c1, 'c2': c2, 'c3': c3, 'c4': c4
     }
 
 
-def simulate_point(T_source, T_supply=35):
-    """Simuliert einen Betriebspunkt"""
-    print(f"\n→ Simuliere B{T_source:.0f}/W{T_supply:.0f}...")
+def simulate_point(T_evap, T_cond=80, Q_cond_kW=5):
+    """
+    Simuliert einen Betriebspunkt
 
-    nw, comps, conns = build_heat_pump()
+    Args:
+        T_evap: Verdampfungstemperatur in °C (entspricht ca. Quellentemperatur)
+        T_cond: Kondensationstemperatur in °C (default 80°C)
+        Q_cond_kW: Kondensatorleistung in kW (default 5 kW)
 
-    # Fluide (NUR auf erste Connection!)
-    conns['c0'].set_attr(fluid={'R410A': 1.0})
-    conns['h1'].set_attr(fluid={'water': 1.0})
-    conns['q1'].set_attr(fluid={'water': 1.0})
+    Returns:
+        dict mit Ergebnissen oder None bei Fehler
+    """
+    print(f"\n→ Simuliere T_evap={T_evap:.0f}°C / T_cond={T_cond:.0f}°C...")
 
-    # Heizkreis
-    T_return = T_supply - 5.0
-    conns['h1'].set_attr(T=T_return, m=0.24)
-    conns['h2'].set_attr(T=T_supply)
+    hp, comps, conns = build_heat_pump()
 
-    # Quellkreis
-    T_source_out = T_source - 3.0
-    conns['q1'].set_attr(T=T_source, m=0.30)
-    conns['q2'].set_attr(T=T_source_out)
+    # Specs - basierend auf working_test.py
+    comps['co'].set_attr(pr=0.98, Q=-Q_cond_kW * 1000)  # Heizleistung (negativ = Wärmeabgabe)
+    comps['ev'].set_attr(pr=0.98)
+    comps['cp'].set_attr(eta_s=0.85)  # isentroper Wirkungsgrad
 
-    # Komponenten (angepasst für bessere Konvergenz)
-    comps['evap'].set_attr(pr1=0.98, pr2=0.98, ttd_l=5)
-    comps['cond'].set_attr(pr1=0.98, pr2=0.98, ttd_u=5)
-    comps['comp'].set_attr(eta_s=0.75)
+    # Verdampfer: gesättigter Dampf bei T_evap
+    conns['c2'].set_attr(T=T_evap, x=1, fluid={"R134a": 1})
 
-    # Kältemittelkreis - Massenstrom und Unterkühlung
-    conns['c0'].set_attr(m=0.05)
-    conns['c3'].set_attr(td_bubble=3)  # 3K Unterkühlung
-
-    # Drücke schätzen
-    try:
-        T_evap_K = (T_source - 5) + 273.15
-        p_evap = CP.PropsSI('P', 'T', T_evap_K, 'Q', 0, 'R410A') / 1e5
-
-        T_cond_K = (T_supply + 5) + 273.15
-        p_cond = CP.PropsSI('P', 'T', T_cond_K, 'Q', 0, 'R410A') / 1e5
-    except:
-        p_evap, p_cond = 5.5, 18.0
-
-    # Startwerte mit besseren Initialwerten für Enthalpie
-    # Verdampferausgang (überhitzter Dampf)
-    try:
-        h1_init = CP.PropsSI('H', 'T', (T_source - 5) + 273.15 + 10, 'P', p_evap * 1e5, 'R410A') / 1e3
-        h2_init = CP.PropsSI('H', 'T', (T_supply + 5) + 273.15 + 20, 'P', p_cond * 1e5, 'R410A') / 1e3
-        h3_init = CP.PropsSI('H', 'T', (T_supply + 5) + 273.15 - 3, 'Q', 0, 'R410A') / 1e3
-    except:
-        h1_init, h2_init, h3_init = 400, 470, 250
-
-    conns['c0'].set_attr(p0=p_evap, h0=h1_init)
-    conns['c1'].set_attr(p0=p_evap, h0=h1_init)
-    conns['c2'].set_attr(p0=p_cond, h0=h2_init)
-    conns['c3'].set_attr(p0=p_cond, h0=h3_init)
-    conns['c4'].set_attr(p0=p_evap)
+    # Kondensator: gesättigte Flüssigkeit bei T_cond
+    conns['c4'].set_attr(T=T_cond, x=0)
 
     # Lösen
     try:
-        nw.solve('design')
-        if nw.status == 0:
-            Q_heat = abs(comps['cond'].Q.val)
-            Q_cool = abs(comps['evap'].Q.val)
-            P_el = abs(comps['comp'].P.val)
-            COP = Q_heat / P_el
+        hp.solve('design')
 
-            print(f"  ✓ COP = {COP:.2f}, P_th = {Q_heat:.2f} kW")
+        if hp.status == 0:
+            Qc = abs(comps['co'].Q.val) / 1000  # W -> kW
+            Pel = comps['cp'].P.val / 1000  # W -> kW
+            Qe = abs(comps['ev'].Q.val) / 1000  # W -> kW
+            COP = Qc / Pel if Pel > 0 else float('nan')
+
+            print(f"  ✓ COP = {COP:.2f}, P_th = {Qc:.2f} kW, P_el = {Pel:.2f} kW")
 
             return {
-                'testpoint': f'B{T_source:.0f}/W{T_supply:.0f}',
-                'T_source': T_source,
-                'T_supply': T_supply,
+                'T_evap': T_evap,
+                'T_cond': T_cond,
                 'COP': COP,
-                'P_th_kW': Q_heat,
-                'P_el_kW': P_el,
-                'Q_source_kW': Q_cool,
+                'P_th_kW': Qc,
+                'P_el_kW': Pel,
+                'Q_source_kW': Qe,
+                'p_evap_bar': conns['c2'].p.val,
+                'p_cond_bar': conns['c3'].p.val,
+                'm_dot_kg_s': conns['c1'].m.val
             }
         else:
-            print(f"  ❌ Nicht konvergiert (Status: {nw.status})")
+            print(f"  ❌ Nicht konvergiert (Status: {hp.status})")
             return None
+
     except Exception as e:
         print(f"  ❌ Fehler: {e}")
         return None
@@ -151,19 +109,35 @@ def main():
     print("="*70)
     print("MINIMAL WORKING MODEL".center(70))
     print("="*70)
-    print("\nEinfaches Modell mit Standard-Parametern (R410A)")
+    print("\nEinfaches Modell mit SimpleHeatExchanger (R134a)")
+    print("Basierend auf working_test.py")
 
-    testpoints = [-10, -7, -5, 0, 5, 10]
+    # Test-Temperaturen (Verdampfung)
+    # Verdampfung bei niedrigeren Temperaturen als Quelle
+    # Typisch: T_evap = T_source - 5K
+    testpoints = [
+        ('B-10/W35', -15, 80),  # B-10 -> T_evap ~ -15°C
+        ('B-7/W35', -12, 80),   # B-7 -> T_evap ~ -12°C
+        ('B-5/W35', -10, 80),   # B-5 -> T_evap ~ -10°C
+        ('B0/W35', -5, 80),     # B0 -> T_evap ~ -5°C
+        ('B5/W35', 0, 80),      # B5 -> T_evap ~ 0°C
+        ('B10/W35', 5, 80),     # B10 -> T_evap ~ 5°C
+    ]
 
     results = []
-    for T_src in testpoints:
-        res = simulate_point(T_src, T_supply=35)
+    for label, T_evap, T_cond in testpoints:
+        res = simulate_point(T_evap, T_cond, Q_cond_kW=5)
         if res:
+            res['testpoint'] = label
             results.append(res)
 
     # Speichern
     if len(results) > 0:
         df = pd.DataFrame(results)
+        # Spalten sortieren
+        cols = ['testpoint', 'T_evap', 'T_cond', 'COP', 'P_th_kW', 'P_el_kW',
+                'Q_source_kW', 'p_evap_bar', 'p_cond_bar', 'm_dot_kg_s']
+        df = df[cols]
 
         Path('data/results/basic_model').mkdir(parents=True, exist_ok=True)
         filename = 'data/results/basic_model/minimal_6points.csv'
@@ -172,7 +146,7 @@ def main():
         print("\n" + "="*70)
         print("ERGEBNIS".center(70))
         print("="*70)
-        print(f"\n✓ {len(results)}/6 Punkte erfolgreich")
+        print(f"\n✓ {len(results)}/{len(testpoints)} Punkte erfolgreich")
         print(f"✓ Gespeichert: {filename}")
 
         print("\nErgebnis-Tabelle:")
@@ -181,7 +155,6 @@ def main():
         print("="*70)
     else:
         print("\n❌ Keine Punkte konvergiert!")
-        print("\n💡 Probiere kA-Werte zu erhöhen oder eta_s zu reduzieren")
 
 
 if __name__ == '__main__':
