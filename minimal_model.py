@@ -22,7 +22,7 @@ from pathlib import Path
 def build_heat_pump():
     """Baut Wärmepumpen-Netzwerk"""
     nw = Network()
-    nw.set_attr(T_unit='C', p_unit='bar', h_unit='kJ / kg')
+    nw.set_attr(T_unit='C', p_unit='bar', h_unit='kJ / kg', iterinfo=False)
 
     # Komponenten
     evap = HeatExchanger('Evaporator')
@@ -84,11 +84,14 @@ def simulate_point(T_source, T_supply=35):
     conns['q1'].set_attr(T=T_source, m=0.30)
     conns['q2'].set_attr(T=T_source_out)
 
-    # Komponenten
+    # Komponenten (angepasst für bessere Konvergenz)
     comps['evap'].set_attr(pr1=0.98, pr2=0.98, ttd_l=5)
     comps['cond'].set_attr(pr1=0.98, pr2=0.98, ttd_u=5)
     comps['comp'].set_attr(eta_s=0.75)
-    comps['valve'].set_attr(pr=1.0)
+
+    # Kältemittelkreis - Massenstrom und Unterkühlung
+    conns['c0'].set_attr(m=0.05)
+    conns['c3'].set_attr(td_bubble=3)  # 3K Unterkühlung
 
     # Drücke schätzen
     try:
@@ -100,12 +103,20 @@ def simulate_point(T_source, T_supply=35):
     except:
         p_evap, p_cond = 5.5, 18.0
 
-    # Startwerte
-    conns['c0'].set_attr(p0=p_evap, m0=0.04)
-    conns['c1'].set_attr(p0=p_evap)
+    # Startwerte mit besseren Initialwerten für Enthalpie
+    # Verdampferausgang (überhitzter Dampf)
+    try:
+        h1_init = CP.PropsSI('H', 'T', (T_source - 5) + 273.15 + 10, 'P', p_evap * 1e5, 'R410A') / 1e3
+        h2_init = CP.PropsSI('H', 'T', (T_supply + 5) + 273.15 + 20, 'P', p_cond * 1e5, 'R410A') / 1e3
+        h3_init = CP.PropsSI('H', 'T', (T_supply + 5) + 273.15 - 3, 'Q', 0, 'R410A') / 1e3
+    except:
+        h1_init, h2_init, h3_init = 400, 470, 250
+
+    conns['c0'].set_attr(p0=p_evap, h0=h1_init)
+    conns['c1'].set_attr(p0=p_evap, h0=h1_init)
+    conns['c2'].set_attr(p0=p_cond, h0=h2_init)
+    conns['c3'].set_attr(p0=p_cond, h0=h3_init)
     conns['c4'].set_attr(p0=p_evap)
-    conns['c2'].set_attr(p0=p_cond)
-    conns['c3'].set_attr(p0=p_cond)
 
     # Lösen
     try:
